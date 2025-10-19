@@ -27,6 +27,11 @@
                 <bean class="org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter"
                       p:database="${jpa.database}" p:showSql="${jpa.showSql}"/>
             </property>
+            <property name="jpaProperties">
+                <props>
+                    <prop key="hibernate.dialect">${hibernate.dialect}</prop>
+                </props>
+            </property>
             <property name="persistenceUnitName" value="petclinic"/>
             <property name="packagesToScan" value="org.springframework.samples.petclinic"/>
         </bean>
