@@ -1,88 +1,177 @@
-# Spring PetClinic Sample Application
+# Spring PetClinic (JNDI + AWS Secrets Manager + Apache mod_proxy_http)
 
-[![Build Status](https://travis-ci.org/spring-petclinic/spring-framework-petclinic.svg?branch=master)](https://travis-ci.org/spring-petclinic/spring-framework-petclinic/) 
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=spring-petclinic_spring-framework-petclinic&metric=alert_status)](https://sonarcloud.io/dashboard?id=spring-petclinic_spring-framework-petclinic)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=spring-petclinic_spring-framework-petclinic&metric=coverage)](https://sonarcloud.io/dashboard?id=spring-petclinic_spring-framework-petclinic)
+Java Spring 기반의 PetClinic 샘플 앱.  
+**DB 비밀번호를 코드/설정에 저장하지 않고**, **Tomcat JNDI + AWS Secrets Manager JDBC**로 **RDS(MySQL)** 에 안전하게 연결합니다.  
+Web 계층은 **Apache HTTP Server(mod_proxy_http)** 로 리버스 프록시하고, WAS는 **Tomcat 9** 를 사용합니다.
 
-GCP Cloud 과제 수행을 위한 Java Spring 으로 개발된 Sample Application 입니다. 
+## 아키텍처 개요
+- **3-Tier**
+    - **Web**: Apache HTTP Server (mod_proxy_http)
+    - **WAS**: Tomcat 9 (Amazon Corretto 8)
+    - **DB**: Amazon RDS (MySQL)
+- **보안 포인트**
+    - DB 자격증명은 **AWS Secrets Manager**에만 저장
+    - 애플리케이션은 **JNDI DataSource**로만 DB 접근
+    - EC2 IAM Role 최소 권한(`secretsmanager:GetSecretValue`)
+    - Web↔WAS는 프라이빗 네트워크 통신(보안그룹으로 포트 최소 개방)
+## 로컬/IDE 빌드
 
-**3-layer architecture** (i.e. presentation --> service --> repository) 로 Tomcat 에 배포하여 2 Tier 로 구성하거나
-또는 nginx 등의 Web 서버를 통해서 Tomcat 을 연결하는 3 Tier 구성을 테스트할 수 있습니다. 
+> 로컬에서는 DB 접속 테스트 없이 **빌드만** 진행합니다.
 
-## Understanding the Spring Petclinic application with a few diagrams
+빌드:
 
-[See the presentation here](http://fr.slideshare.net/AntoineRey/spring-framework-petclinic-sample-application) (2017 update)
+    mvn -U clean package
 
-## Running petclinic locally
+- Windows PowerShell에서 Maven/JDK 명령 인식 안 되면:
+    - JDK `bin`, Maven `bin`을 PATH에 추가하거나
+    - IntelliJ의 Maven 패널(우측)에서 빌드
 
-### Tomcat 설치 및 Start
-Tomcat 설치 가이드를 참조하여 Tomcat 설치 후, tomcat-users.xml 에 User 및 Role 추가
+생성물: `target/petclinic.war`
+## 애플리케이션 변경점(요약)
 
-[ Ubuntu 18.04 : Tomcat 9 설치하는 방법 ](https://jjeongil.tistory.com/1351)
+- `pom.xml`: `aws-secretsmanager-jdbc` 의존성 추가 (`runtime`)
+- `spring/datasource-config.xml`: **JNDI Lookup만 사용**
+- `spring/business-config.xml`: XSD 헤더 정리, 프로필 구조 유지
+- `spring/data-access.properties`: `jdbc.url/username/password` 제거
+- `META-INF/context.xml`: **Secrets Manager JDBC** 기반 **JNDI DataSource** 정의
+- `WEB-INF/web.xml`: `resource-ref` 선언
+## AWS 배포 (Tomcat JNDI + Secrets Manager)
 
-Tomcat User 및 Role 추가
+### 1) 사전 준비
+- **RDS(MySQL)**: DB 생성 (예: `petclinic`)
+- **Secrets Manager**: 시크릿 생성(이름 예: `petclinic/rds/mysql`)
+    - 최소 키: `username`, `password` (host/dbname은 URL로 전달)
+- **IAM Role(EC2 인스턴스 프로파일)** 예시 정책:
 
-```
-# $TOMCAT_HOME/conf/tomcat-users.xml 파일에 아래 행들을 추가
+        {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": "arn:aws:secretsmanager:ap-northeast-2:<ACCOUNT_ID>:secret:petclinic/rds/mysql-*"
+          }]
+        }
 
-    <role rolename="manager-script"/>
-    <role rolename="manager-gui"/>
-    <role rolename="manager-jmx"/>
-    <role rolename="manager-status"/>
-    <user username="tomcat" password="tomcat" roles="manager-gui,manager-script,manager-status,manager-jmx"/>
-```
+- **보안그룹**
+    - Web 인스턴스: 80(또는 443) Inbound from Internet
+    - WAS 인스턴스: 8080 Inbound only from Web SG
+    - RDS: 3306 Inbound only from WAS SG
 
-Tomcat 을 실행 ( 위의 Tomcat 설치 가이드를 통해서 이미 실행되어 있는 경우에는 Skip )
+### 2) WAR 내부 JNDI 설정 (이미 포함됨)
+`src/main/webapp/META-INF/context.xml` 에 **JNDI DataSource**가 정의되어 있으며, 배포 시 자동 인식됩니다.  
+아래 값만 환경에 맞게 수정 후 빌드하세요.
 
-```
-$TOMCAT_HOME/bin/catalina.sh start
-```
+    <Resource name="jdbc/petclinic"
+              type="javax.sql.DataSource"
+              factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
+              driverClassName="com.amazonaws.secretsmanager.sql.AWSSecretsManagerMySQLDriver"
+              url="jdbc-secretsmanager:mysql://<RDS_ENDPOINT>:3306/petclinic?useUnicode=true&characterEncoding=utf8"
+              username="arn:aws:secretsmanager:ap-northeast-2:<ACCOUNT_ID>:secret:petclinic/rds/mysql-XXXXXXXX"
+              password=""
+              initialSize="2" maxActive="20" minIdle="2"
+              testOnBorrow="true" validationQuery="SELECT 1"
+              removeAbandoned="true" removeAbandonedTimeout="60"
+              jdbcInterceptors="ConnectionState;StatementFinalizer"/>
 
-### Tomcat 배포 ( H2 In-memory Database 활용 )
-```
-git clone https://github.com/SteveKimbespin/petclinic_btc.git 
-cd petclinic_btc
-./mvnw tomcat7:deploy
-```
+> `username`에는 **시크릿 이름** 또는 **ARN**을 사용할 수 있습니다. 운영 고정이면 **ARN 권장**.  
+> 비밀번호는 **공란**(드라이버가 시크릿에서 조회).
 
-You can then access petclinic here: [http://localhost:8080/petclinic](http://localhost:8080/petclinic)
+### 3) Spring 프로필 활성화
+JPA 사용을 위해 **WAS에 프로필을 지정**합니다.
 
-<img width="1042" alt="petclinic-screenshot" src="https://cloud.githubusercontent.com/assets/838318/19727082/2aee6d6c-9b8e-11e6-81fe-e889a5ddfded.png">
+- systemd 예 (`tomcat.service`):
 
-### 외부에 구성한 MySQL Database 연결 방법
+        Environment="CATALINA_OPTS=-Dspring.profiles.active=jpa"
 
-MySQL 을 각 CSP 의 DB Service 로 구성
-  - database 명 : petclinic  
-  - db user 및 password 설정
+- 수동 기동 예:
 
-MySQL database 접속 설정을 하기 위해, pom.xml 파일에 정의 된 'MySQL' profile 을 아래와 같이 수정후, 재배포(redeploy)한다.
-  - jdbc.url 부분에 정의되어 있는 DNS 또는 IP Address 를 연결하고자 하는 MySQL IP 로 변경한다. ( 필요시 database 도 수정)
-  - db 접속 User ID 및 Password 수정
+        export CATALINA_OPTS="$CATALINA_OPTS -Dspring.profiles.active=jpa"
 
-```
-<properties>
-    <jpa.database>MYSQL</jpa.database>
-    <jdbc.driverClassName>com.mysql.cj.jdbc.Driver</jdbc.driverClassName>
-    <jdbc.url>jdbc:mysql://localhost:3306/petclinic?useUnicode=true</jdbc.url>
-    <jdbc.username>petclinic</jdbc.username>
-    <jdbc.password>petclinic</jdbc.password>
-</properties>
-```      
+### 4) 배포/기동
+1) `target/petclinic.war` → `${CATALINA_BASE}/webapps/` 업로드
+2) 기존 `webapps/petclinic/`(exploded) 디렉터리가 있으면 삭제
+3) Tomcat 재시작:
 
-Tomcat 에 재배포
+        systemctl restart tomcat
+        # 또는
+        $CATALINA_BASE/bin/catalina.sh restart
 
-```
-# 기존에 배포되어 있는 환경에 MySQL 연결 설정 수정후, 재배포 하는 경우
-./mvnw tomcat7:redeploy -P MySQL
+### 5) 헬스 체크
+- 접속: `http://<WEB or LB>` (Apache가 80/443으로 프록시)
+- 로그:
+    - `${CATALINA_BASE}/logs/catalina.out`
+- 성공 신호:
+    - JNDI lookup 성공, `SELECT 1` 검증 OK
+- 실패 힌트:
+    - `AccessDeniedException` → IAM/시크릿 권한 확인
+    - `Communications link failure` → SG/네트워크 확인
+    - `No suitable driver` → `driverClassName`/`jdbc-secretsmanager:` 접두어 확인
+## Apache (Web) 설정 – mod_proxy_http
 
-# 최초 배포하는 경우
-./mvnw tomcat7:deploy -P MySQL
-```
+> Web 인스턴스(Apache)가 WAS(Tomcat:8080)로 프록시합니다.  
+> SSL을 사용할 경우 `SSLCertificateFile/KeyFile` 추가와 `VirtualHost *:443` 구성으로 확장하세요.
 
+### 모듈 활성화(Amazon Linux 예)
 
-You can then access petclinic here: [http://localhost:8080/petclinic](http://localhost:8080/petclinic)
+    sudo dnf install -y httpd
+    sudo systemctl enable --now httpd
 
+모듈 로드(배포판에 따라 다를 수 있음):  
+`/etc/httpd/conf.modules.d/00-proxy.conf` 등에 다음이 포함되어야 함
 
+    LoadModule proxy_module modules/mod_proxy.so
+    LoadModule proxy_http_module modules/mod_proxy_http.so
+    # (SSL 쓸 때)
+    LoadModule ssl_module modules/mod_ssl.so
+    # (보안 헤더)
+    LoadModule headers_module modules/mod_headers.so
 
+### 가상호스트(리버스 프록시) 예시
 
+    <VirtualHost *:80>
+        ServerName <YOUR_DOMAIN_OR_PUBLIC_IP>
 
+        # 보안 헤더(옵션)
+        Header always set X-Content-Type-Options "nosniff"
+        Header always set X-Frame-Options "SAMEORIGIN"
+        Header always set X-XSS-Protection "1; mode=block"
+
+        # 프록시 설정
+        ProxyPreserveHost On
+        ProxyRequests Off
+
+        # 정방향 프록시 금지(보안)
+        <Proxy "*">
+            Require all denied
+        </Proxy>
+
+        # 리버스 프록시
+        ProxyPass        "/" "http://<WAS_PRIVATE_IP_or_DNS>:8080/"
+        ProxyPassReverse "/" "http://<WAS_PRIVATE_IP_or_DNS>:8080/"
+
+        ErrorLog  /var/log/httpd/petclinic_error.log
+        CustomLog /var/log/httpd/petclinic_access.log combined
+    </VirtualHost>
+
+포인트
+- Apache SG는 80(또는 443)만 외부로 오픈
+- WAS SG는 8080 포트만 **Apache SG로부터** 허용
+- `ProxyPreserveHost On`으로 원래 Host 헤더 유지(앱이 절대경로 링크 생성 시 유리)
+## 트러블슈팅
+
+- **Maven이 `aws-secretsmanager-jdbc`만 못 받는 경우**
+    - Maven Central 미러/프록시/캐시 문제일 확률 높음
+    - 조치: *Reload All Maven Projects*, 필요 시 `pom.xml`에 `<repositories>`로 Central 지정, `~/.m2` 캐시 삭제, 오프라인 모드 해제
+- **`URI is not registered` 경고**
+    - 스키마 헤더를 정석으로 교체
+    - `p` 네임스페이스는 **beans 스키마 축약** → **Fetch 대상 아님**(Ignore 처리 또는 beans.xsd로 매핑)
+- **`AccessDeniedException` (Secrets Manager)**
+    - EC2 IAM Role 정책의 `Resource` ARN 범위/리전 확인
+- **프록시 루프/404**
+    - Apache `ProxyPass` 경로 슬래시(`/`) 매칭, Tomcat 컨텍스트 경로 확인
+- **한/영 문자 깨짐**
+    - `?useUnicode=true&characterEncoding=utf8` 옵션 확인
+    - Apache `AddDefaultCharset Off` 검토
+
+## 라이선스
+본 프로젝트는 학습/실습 목적 샘플입니다.
