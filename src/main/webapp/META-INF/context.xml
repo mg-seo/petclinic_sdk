@@ -7,7 +7,7 @@
               type="javax.sql.DataSource"
               factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
               driverClassName="com.amazonaws.secretsmanager.sql.AWSSecretsManagerMySQLDriver"
-              url="jdbc-secretsmanager:mysql://RDS_ENDPOINT:3306/petclinic?useUnicode=true"
+              url="jdbc-secretsmanager:mysql://RDS_ENDPOINT:3306/petclinic?useUnicode=true&amp;driver=com.mysql.cj.jdbc.Driver"
               username="petclinic/rds/mysql"
               password=""
               initialSize="2"
