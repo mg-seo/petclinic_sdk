@@ -80,6 +80,9 @@
         <docker.jib-maven-plugin.version>2.6.0</docker.jib-maven-plugin.version>
         <docker.image.prefix>springcommunity</docker.image.prefix>
 
+        <!-- AWS Secrets Manager JDBC 버전 -->
+        <aws-sm-jdbc.version>2.0.3</aws-sm-jdbc.version>
+
     </properties>
 
     <dependencyManagement>
@@ -288,6 +291,15 @@
             <artifactId>javax.activation-api</artifactId>
             <version>${javax-activation.version}</version>
         </dependency>
+
+        <!-- AWS Secrets Manager JDBC (시크릿으로 DB 비밀번호 조회) -->
+        <dependency>
+            <groupId>com.amazonaws.secretsmanager</groupId>
+            <artifactId>aws-secretsmanager-jdbc</artifactId>
+            <version>${aws-sm-jdbc.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
 
     </dependencies>
 

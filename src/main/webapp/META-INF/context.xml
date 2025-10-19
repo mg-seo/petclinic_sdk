@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Context>
+
+    <!-- ★ JNDI DataSource backed by AWS Secrets Manager JDBC wrapper -->
+    <Resource name="jdbc/petclinic"
+              auth="Container"
+              type="javax.sql.DataSource"
+              factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
+              driverClassName="com.amazonaws.secretsmanager.sql.AWSSecretsManagerMySQLDriver"
+              url="jdbc-secretsmanager:mysql://RDS_ENDPOINT:3306/petclinic?useUnicode=true"
+              username="petclinic/rds/mysql"
+              password=""
+              initialSize="2"
+              maxActive="20"
+              maxIdle="10"
+              minIdle="2"
+              testOnBorrow="true"
+              validationQuery="SELECT 1"
+              removeAbandonedTimeout="60"
+              removeAbandoned="true"
+              jdbcInterceptors="ConnectionState;StatementFinalizer" />
+</Context>
